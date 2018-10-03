@@ -1,0 +1,612 @@
+---
+title: Smog and transport resolution in Kraków
+author: Adam Czepielik
+date: '2018-10-03'
+slug: smog-and-transport
+categories: []
+tags:
+  - Kraków
+  - local
+  - smog
+  - ARIMAX
+subtitle: ''
+description: 'In this post I take a look at the resolution providing free transport for car drivers in case of huge air pollution, adopted in Krakow in 2015. Three versions of this resolution have been in use. In the first version, decision about providing free transport was on a basis of measurements from the previous day. But this method was criticized for having one-day lags in decisions. In the next version decisions were based on forecasts. But what was criticized then was the accuracy of those forecasts. From 5th July 2018 both criteria are used. Whih is a good idea as I show below.'
+---
+
+```{r global options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, out.width = '95%', fig.width = 8, fig.height = 5, fig.retina = 1, dpi = 300, cache = TRUE)
+
+library(ggthemr)
+ggthemr('fresh')
+
+Sys.setlocale("LC_ALL", 'en_US.UTF-8')
+Sys.setlocale("LC_MEASUREMENT", 'en_US.UTF-8')
+Sys.setlocale("LC_PAPER", 'en_US.UTF-8')
+Sys.setenv(LANG = "en_US.UTF-8")
+```
+
+**In this post I take a look at the resolution providing free transport for car drivers in case of huge air pollution, adopted in Krakow in 2015. Three versions of this resolution have been in use. In the first version, decision about providing free transport was on a basis of measurements from the previous day. But this method was criticized for having one-day lags in decisions. In the next version decisions were based on forecasts. But what was criticized then was the accuracy of those forecasts. From 5th July 2018 both criteria are used. Which is a good idea as I show below.**
+
+&nbsp;
+
+<div style="background-color: #e2e2e2; padding: 10px; margin: 5px 10px;"> This post is a modified version of my assignment paper for Quantitative Analysis of Managerial Decisions classes on the Jagiellonian University [(contents, version 2018-10-03)](http://www.de-brouwer.com/students/uj.html). I submitted the paper in June, but three weeks later the resolution, which I analise here, was changed. So the report needed to be changed too. 
+
+As this is my first bigger analytical project I ask readers for their indulgence with respect to the code quality. </div>
+
+&nbsp;
+<ul>
+<li><a href="#air-pollution-in-krakow">Air pollution in Kraków</a><ul>
+<li><a href="#free-transport-resolution">Free transport resolution</a></li>
+<li><a href="#data">Data</a></li>
+</ul></li>
+<li><a href="#overview">Overview</a><ul>
+<li><a href="#pollution-course">Pollution course</a></li>
+<li><a href="#free-transport-annoucements">Free Transport Annoucements</a></li>
+</ul></li>
+<li><a href="#free-transport-in-the-old-version-of-the-resolution.">Free transport in the old version of the resolution.</a><ul>
+<li><a href="#isolated-days">Isolated days</a></li>
+<li><a href="#series">Series</a></li>
+</ul></li>
+<li><a href="#announcements-based-on-forecasts">Announcements based on forecasts</a><ul>
+<li><a href="#own-forecasting">Own forecasting</a><ul>
+<li><a href="#model-1-day-by-day">Model 1: day-by-day</a></li>
+<li><a href="#model-2-hour-by-hour">Model 2: hour-by-hour</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#combined-aproach">Combined aproach</a></li>
+</ul>
+
+
+# Air pollution in Kraków
+
+From many years the city of Kraków has faced serious environmental problem of air pollution. According to European Environment Agency report from 2013 Krakow is third mostly polluted city in Europe among around 400 investigated [^1].
+
+There are several sources of air pollution in Krakow and the impact of all of them is amplified by unfavourable geographical location. They also differ for different types of pollution. Here I focus on Particulate Matter 10 nm (PM10) for reasons explained below. Report contributed in 2015 to Małopolska Marshall's Office [^2] suggests that main sources of PM10 pollution are:
+
+ - local, superficial sources (e.g. chimneys' smoke): ~ 57%
+ - industry: ~23%
+ - local communication: ~16%
+ 
+## Free transport resolution
+
+Several programs aimed at pollution reduction have been started in recent years. One of them is the resolution, adopted in December 2015 by municipal council. It allows passangers (car drivers and their passengers in a number specified in cars registration document; after some changes: everybody) to use public transportation means for free at given day if PM 10 pollution at the day before was high enough. 
+
+Although the idea of providing free transportation has been widely supported, criteria adopted in municipal council document were often criticized. The main disadvantage, which was pointed out, was the observation that in such a shape the resolution always works with one day lag. If the pollution was high at a given day and not at the day before, there was no possibility to announce free transport then, but only at the following day.
+
+For this and similar reasons the resolution was changed in December 2017 [^3] and from then the decision about announcement of free transport was based on forecasts provided by Institute of Meteorology and Water Management. The accuracy of forecasts was unsatisfactory however. Therefore the new adaptation has been made and now decision is based on forecasts and also on measurements from 3am at a day of interest.
+
+Below I take a look at the performance of past versions of the resolution and compare them to hypothetical scenario of usage of the current version.
+
+## Data
+
+I have obtained data from the following sources:
+
+ - Information about days, when free transport was provided I have received as a response for public information request sent to City Hall (Attachment 1, in Polish), as there is no publicly available register of all free transport announcements. Because there were some inconsistency between data I received and records in the Bulletin of Public Information (exhibiting clear patterns as e. g. one day lag) I have eventually composed list of the free transport days from those two sources.
+ - Data about PM 10 pollution I have scrapped from Regional Inspectorate of Environment Protection site (http://monitoring.krakow.pios.gov.pl/dane-pomiarowe/automatyczne) using automated queries run with `curl` library (scripts on Github: scrapping, extracting).
+ - Meteorological data were obtained from Institute of Meteorology and Water Management (IMGW) archives (https://dane.imgw.pl/data/dane_pomiarowo_obserwacyjne/) by hand.
+
+
+```{r loading_dataests, results='hide', echo=FALSE}
+library(lubridate)
+
+load("daily_records.Rdata")
+load("hourly_records.Rdata")
+meteo <- readRDS("~/R/smog/meteo.RDS") # please, download it yourself
+
+hourly$time <- force_tz(hourly$time, tz = 'CET')
+hourly$time <- with_tz(hourly$time, tz = 'Europe/Warsaw')
+```
+
+# Overview
+## Pollution course
+
+The figure below shows day-by-day course of the average level of PM 10 pollution. Daily norm of admissible pollution is 50 $\mu g/m^3$ and it shouldn't be exceeded more than 35 times a year. I focus only on data from November 1st to March 31st, since there norms exceedeness in summer months almost never occur.
+
+
+```{r pollution_course, echo=FALSE, message=FALSE, results='hide'}
+library(dplyr)
+library(ggplot2)
+
+
+season <- function(time){
+  if(time <= as.Date("2016-03-31")){
+    return("2015/2016")
+  } else if(time <= as.Date("2017-03-31")){
+    return("2016/2017")
+  } else {
+    return("2017/2018")
+  }
+}
+
+data.frame(time = daily$time,
+           pm10 = rowMeans(daily[-1], na.rm = TRUE),
+           period = sapply(daily$time, season)) %>%
+  ggplot(aes(x = time, y = pm10)) + geom_line(color = swatch()[6]) +
+  geom_hline(yintercept = 50, color = swatch()[4], size = 1) +
+  facet_grid(~period, scales = "free_x") + labs(title = 'Seasonal course of PM 10 pollution', y = 'PM 10 [ug/m3]', x = '')
+
+```
+
+It is also interesting to look at the averaged course of the pollution in one day:
+
+```{r pollution_hourly_course, echo=FALSE, message=FALSE}
+library(lubridate)
+
+data.frame(hour = hour(hourly$time),
+           pm10 = rowMeans(hourly[-1], na.rm = TRUE)) %>% 
+ ggplot(aes(x = hour, y = pm10)) + geom_smooth(level = 0.98, color = swatch()[6]) +  coord_cartesian(ylim=c(0, 100)) + labs(title = 'Averaged Daily Course of PM 10 Pollution in winter', y = 'PM 10 [ug/m3]', x = 'Hour')
+
+```
+
+The highest level is observed at night, most probably because of heating in houses. We observe decreasing trend towards morning, when pollution slightly increases. Then it goes to minimum at afternoon and returns to high values at evening and night.
+
+As we will see this pattern can be exhibited in different scale and contaminated or changed by different factors and eventually daily course can look much different.
+
+## Free Transport Annoucements
+
+The following table presents when the free public transport for car drivers was provided: 
+
+```{r free_transport_dates, echo=FALSE, results='hide'}
+free <- as.Date(c('2016-01-02', '2016-01-24', '2016-11-25', '2017-01-09', '2017-01-10',
+                  '2017-01-11', '2017-01-12', '2017-01-21', '2017-01-24', '2017-01-26', 
+                  '2017-01-28', '2017-01-29', '2017-01-30', '2017-01-31', '2017-02-01',
+                  '2017-02-02', '2017-02-04', '2017-02-15', '2017-02-16', '2017-02-17', 
+                  '2017-02-18', '2018-01-02', '2018-01-07', '2018-03-07'))
+
+```
+
+
+|Heating season|Free transport days|
+|-----------|------------------------------------------------------------------------------|
+|2015/16|`r paste(format(free[1:2], "%b-%d"), collapse = ",  ")`|
+|2016/17|`r paste(format(free[3:21], "%b-%d"), collapse = ",  ")`|
+|2017/18|`r paste(format(free[22:24], "%b-%d"), collapse = ",  ")`|
+
+We can see the correlation between this table and seasonal course. In 2016/17 season, when pollution was generally high there are many announcements and there are only four in other seasons, when the pollution level only few times exceeded level of 100 $\mu g/m^3$ (at the begging of 2015/16 season the resolution has not been adopted yet).
+
+There were 24 announcements at all, 21 in the old regime (based on previous day data) and three in the new one (based on forecasts). This is scarely enough (with data I have) to examine whether there was any impact of the resolution on pollution level. Moreover different patterns of pollution course can be observed what makes any inference even more difficult.
+
+
+# Free transport in the old version of the resolution.
+
+## Isolated days
+
+As we can see from the table above, there were four days of all with free transport we can call *isolated*, as time to the next or the previous announcement was longer than one day.
+
+
+```{r extraction_function, echo=FALSE}
+mark <- function(day){
+  if(day %in% free){
+    return("Free")
+  } else {
+    return("Regular")
+  }
+}
+
+extraction <- function(start, end){
+    hourly %>% mutate(pm10 = rowMeans(hourly[-1], na.rm = TRUE)) %>%
+    select(time, pm10) %>% 
+    filter(as_date(time) >= start & as_date(time) <= end) %>% rowwise() %>% 
+    mutate(Transport = mark(as_date(time))) %>% ungroup() %>% 
+    
+    ggplot(aes(x = time, y = pm10, colour = Transport)) + 
+    geom_line(aes(group = 0), size = 1.1) +
+    scale_color_manual(values = c(swatch()[9], swatch()[6])) + 
+    theme(legend.position = "bottom") +
+    coord_cartesian(ylim = c(0, 350)) + 
+    scale_x_datetime(date_breaks = "day", date_labels = "%b %d", minor_breaks = c()) + 
+    labs(x = '', y = 'PM 10 [ug/m3]')
+}
+```
+
+```{r echo=FALSE, message=FALSE, results='hide'}
+library(ggpubr)
+ggarrange(extraction(free[1] - 2, free[1] + 1) + labs(title = "Season 2015/16"),
+                 extraction(free[2] - 2, free[2] + 1) + labs(title = "", y = ""), ncol = 2, 
+          common.legend = TRUE, legend = 'bottom')
+```
+
+```{r echo=FALSE, message=FALSE,results='hide'}
+ggarrange(extraction(free[3] - 2, free[3] + 1) + labs(title = "Season 2016/17"),
+                 extraction(free[8] - 2, free[8] + 1) + labs(title = "", y = ""), ncol = 2, 
+          common.legend = TRUE, legend = 'bottom')
+```
+
+Three observations are relevant here:
+
+ - At each of those days PM 10 pollution was lower than at the previous day.
+ - This fact however should not be explained as a result of lower transport pollution rates. Drops in the pollution level occurred before rush hours and were much bigger than 16% mentioned before (with exception to 21st January). On the other hand we can't say that there was no impact of resolution at all, at those days. Maybe it prevented pollution level to increase back. But accurate explanatory models would be required to check such assumptions.
+ - Daily courses of pollution are much different than average course. And one can check that this observation can be applied not only to those four days.
+
+## Series
+
+Rest of days with free transport (in the old version of resolution) can be naturally compounded into longer series:
+
+```{r echo=FALSE, message=FALSE}
+extraction(free[4] - 2, free[7] + 1) + labs(title = '7th - 13th January 2017')
+```
+
+```{r echo=FALSE, message=FALSE}
+extraction(free[9] - 1, free[17] + 1) + labs(title = '23rd January - 5th February 2017')
+```
+
+```{r echo=FALSE, message=FALSE}
+extraction(free[18] - 1, free[21] + 1) + labs(title = '14th - 19th February 2017')
+```
+
+
+Although the set of days with free transport was relatively small we can perhaps say that following criticisms of the first version of resolution were sound:
+ 
+ 1. The result of basing decisions on past data is that there is always one day with high pollution and regular transport fees and one day with free transport but relatively small pollution which is not desirable.
+ 2. When pollution level oscillated, free transport was (twice) switched off too early ending up with the situation of the high pollution and regular transport policy.
+
+# Announcements based on forecasts
+
+To avoid problems mentioned above, from the beginning of 2018, forecasts have been used to make decisions about free transport. But unfortunately their quality was not satisfactory.  At all three days when free transport was provided in 2018, pollution was not very high, according to old version of resolution standards:
+
+```{r echo=FALSE, message=FALSE}
+
+ggarrange(extraction(free[22] - 1, free[22] + 1) + labs(title = "False positives"),
+          extraction(free[23] - 1, free[23] + 1) + labs(title = "", y = ""),
+          extraction(free[24] - 1, free[24] + 1) + labs(title = "", y = ""), 
+          ncol = 3, common.legend = TRUE, legend = 'bottom')
+```
+
+Moreover, there were three days when pollution was high, but forecasts did not predict it:
+
+```{r echo=FALSE, results='hide'}
+old_test <- function(day){
+  
+  df <- hourly  %>% mutate(pm10 = rowMeans(hourly[-1], na.rm = TRUE)) %>%
+    select(time, pm10) %>% filter(as_date(time) == day)
+    
+  
+  fst <- df %>% filter(hour(time) >= 1 & hour(time) <= 16)
+  snd <- df %>% filter((hour(time) >= 12 & hour(time) <= 22))
+  
+  if(mean(fst$pm10, na.rm = TRUE) > 150 | mean(snd$pm10, na.rm = TRUE) > 150){
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+  
+}
+```
+
+```{r echo=FALSE, results='hide'}
+g1 <- hourly %>% mutate(pm10 = rowMeans(hourly[-1], na.rm = TRUE)) %>% 
+    select(time, pm10) %>% 
+    filter(as_date(time) >= as.Date('2018-01-26') - 1 & as_date(time) <= as.Date('2018-01-26') + 1) %>% 
+    rowwise() %>% mutate(old = old_test(as_date(time))) %>% ungroup() %>% 
+    ggplot(aes(x = time, y = pm10, colour = old)) +
+    geom_line(aes(group = 0), size = 1) +
+    scale_color_manual(values = c(swatch()[6], swatch()[4])) + 
+    theme(legend.position = "none") +
+    coord_cartesian(ylim = c(0, 350)) +
+    scale_x_datetime(date_breaks = "day", date_labels = "%b %d", minor_breaks = c()) +
+    labs(x = '', y = 'PM 10 [ug/m3]', title = "True negatives")
+
+g2 <- hourly %>% mutate(pm10 = rowMeans(hourly[-1], na.rm = TRUE)) %>% 
+    select(time, pm10) %>% 
+    filter(as_date(time) >= as.Date('2018-03-04') - 1 & as_date(time) <= as.Date('2018-03-05') + 1) %>% 
+    rowwise() %>% mutate(old = old_test(as_date(time))) %>% ungroup() %>% 
+    ggplot(aes(x = time, y = pm10, colour = old)) +
+    geom_line(aes(group = 0), size = 1) +
+    scale_color_manual(values = c(swatch()[6], swatch()[4])) + 
+    theme(legend.position = "none") +
+    coord_cartesian(ylim = c(0, 350)) +
+    scale_x_datetime(date_breaks = "day", date_labels = "%b %d", minor_breaks = c()) +
+    labs(x = '', y = '', title = "")
+
+ggarrange(g1, g2, ncol = 2, widths = c(2, 3))
+```
+
+## Own forecasting
+
+On the Institute's website one can find that forecasts are based on physical and statistical models with this second group consisting of ARIMAX and neural networks. I've tried to make some forecasts on my own, with ARIMAX model. Honestly, they are not accurate with respect to Mean Absolute Percentage Error (MAPE), but theyare still better predictors of days with pollution high enough to provide free transport, than official forecasts.
+
+As exogenous variables for ARIMAX I use atmospheric data from one day before a day I am predicting for. Among available data about cloudiness, wind speed, temperature, atmospheric pressure, humidity and precipitation,  I have chosen first four parameters, as they were recognised as statistically significant.
+
+### Model 1: day-by-day
+In the first model I predict daily means of pollution level with ARIMAX(1, 1, 1)
+
+```{r echo=FALSE}
+df <- data.frame(time = daily$time,
+                 pm10 = rowMeans(daily[-1], na.rm = TRUE)) %>% 
+  left_join(meteo, by = 'time') %>% rowwise() %>% 
+  mutate(Precipitation = Precipitation_day + Precipitation_night) %>% 
+  ungroup() %>% select(-c(Precipitation_day, Precipitation_night))
+
+df$time <- lead(df$time)
+df$pm10 <- lead(df$pm10)
+df <- df[-dim(df)[1],]
+
+train <- filter(df, time < as.Date('2018-01-01'))
+test <- filter(df, time >= as.Date('2018-01-01'))
+
+```
+
+```{r}
+library(forecast)
+library(tseries)
+
+model <- Arima(train$pm10, order = c(1, 1, 1), xreg = train[c("Cloudy", "Wind_speed", "Temperature", "Atm_pressure")])
+
+summary(model)
+```
+
+```{r}
+model_test <- Arima(test$pm10, model = model, xreg = test[c("Cloudy", "Wind_speed", "Temperature", "Atm_pressure")])
+```
+
+Model was trained on days prior to 1st January 2018 and that's how it looks on new data (new data are taken into account every day, model parameters remain the same):
+
+```{r echo=FALSE}
+ggplot(data = test, aes(x = time, y = pm10)) + geom_line(aes(colour = 'Actual value')) + geom_line(aes(y = model_test$fitted, colour = 'Predicted value'), size = 0.8) + scale_color_manual(values = c(swatch()[6], swatch()[2]), name = "") +  
+  labs(title = 'Forecast with ARIMAX(1, 1, 1)', subtitle = 'Frequency: daliy, Forecast horizon = 24h', y = "PM 10 [ug/m3]", x = "Day (from Jan-1 to Mar-31, 2018)") + theme(legend.position = c(0.9, 0.9))
+```
+
+The Mean Absolute Percentage Error on test set was 34.2 which is not satisfactory.
+```{r}
+accuracy(model_test$fitted, test$pm10)
+```
+<div style="background-color: #e2e2e2; padding: 10px; margin: 5px 10px;">
+This forecast predicts daily average pollution but criteria specified in resolution deal with within-day time windows. In the second specification of criteria the average pollution must be greater than 150 $\mu g/m^3$ between 1am and 4/5pm or between noon and 10/11pm [^4]. So there is a need to specify some threshold to decide, on a base of forecast, whether to provide a free transport or not. I use ROC curve to check the dependence between daily average pollution and criteria fulfilment (on a training set) and finally to determine this threshold.
+
+```{r echo=FALSE}
+day_decison <- train %>% dplyr::select(time, pm10) %>% rowwise() %>% dplyr::mutate(transport = old_test(time)) %>% ungroup()
+```
+
+```{r echo=FALSE, message=FALSE}
+library(pROC)
+rcv <- roc(day_decison$transport, day_decison$pm10)
+ths <- coords(rcv, x = 'best')[1]
+
+rocplot <- ggroc(rcv) + geom_point(aes(x = coords(rcv, x = 'best')[2]), y = coords(rcv, x = 'best')[2],
+                                   size = 3, color = swatch()[3]) + annotate("")
+ggarrange(rocplot,
+ggplot(day_decison, aes(transport, pm10)) + geom_jitter(alpha = 0.4) + geom_hline(aes(yintercept = ths), color = swatch()[3], size = 2) + coord_flip() + labs(x = "Free transport", y = "PM 10 [ug/m3]"),
+nrow = 2, heights = c(3, 2))
+```
+
+The optimal value (in accuracy metric) for threshold determined on training data equals 123.68.</div>
+
+Unfortunately this model is not useful for predicting high, free transport-demanding pollution. Although it doesn't produce any false positives it also doesn't predict any of days with high pollution it should.
+
+```{r echo=FALSE, results='hold'}
+day_decison_test <- test %>% select(time, pm10) %>% 
+  mutate(prediction = as.vector(model_test$fitted)) %>% rowwise() %>%
+  mutate(Free_transport_prediction = prediction > ths, Fulfilling_old_criteria = old_test(time)) %>% ungroup()
+
+day_decison_test[day_decison_test$Free_transport_prediction | day_decison_test$Fulfilling_old_criteria, ] %>% 
+  knitr::kable(col.names = c("Date", "Actual PM10", "Predicted PM10", "Free transport acc. to prediction", "Free transport acc. to old criteria"))
+```
+
+
+### Model 2: hour-by-hour
+
+Let us use hourly taken measurements instead of daily averages. Not having such detailed meteorological data I will use the same, average measurements for the whole day.
+
+However we could expect 24-hour seasonality in our data, main tests for seasonality do not spot it. I decided then to use arithmetic mean of two ARIMA models: (3, 1, 3) without seasonality and (2, 1, 2) with (1, 1, 1) 24-hour seasonality. Both of them has some advantages and disadvantages and the mean has lower error then any of the two alone.
+
+The figure below shows values predicted by this model on test data:
+
+
+```{r echo=FALSE}
+hdata <- data.frame(date = as_date(hourly$time),
+                    time = hourly$time,
+                    pm10 = rowMeans(hourly[-1], na.rm = TRUE)) %>% 
+  left_join(meteo, by = c("date" = "time")) %>% 
+  select(-date, -Precipitation_day, -Precipitation_night)
+
+hdata$time <- lead(hdata$time, 24)
+hdata$pm10 <- lead(hdata$pm10, 24)
+
+hdata <- hdata[1:10878, ]
+
+htrain <- filter(hdata, as_date(time) < as.Date('2018-01-01'))
+htest <- filter(hdata, as_date(time) >= as.Date('2018-01-01'))
+```
+
+```{r echo=FALSE}
+hmodel <- Arima(htrain$pm10, order = c(2, 1, 2),
+                seasonal = list(order = c(1, 1, 1), period = 24),
+                xreg = htrain[-c(1,2)])
+
+```
+
+```{r echo=FALSE}
+hmodel1 <- Arima(htrain$pm10, order = c(3, 1, 3),
+                xreg = htrain[-c(1,2)])
+```
+
+```{r echo=FALSE}
+i <- 0
+outcome <- numeric(0)
+while(i < 2137){
+  fdata <- rbind(htrain, htest[0:i, ])
+  tmp_model <- Arima(fdata$pm10, model = hmodel, xreg = fdata[, 3:7])
+  outcome <- c(outcome,forecast(tmp_model, h = 24, xreg=htest[seq(i+1,i+24), 3:7])$mean)
+               
+  i <- i + 24
+}
+
+```
+
+
+```{r echo=FALSE}
+i <- 0
+outcome1 <- numeric(0)
+while(i < 2137){
+  fdata1 <- rbind(htrain, htest[0:i, ])
+  tmp_model1 <- Arima(fdata1$pm10, model = hmodel1, xreg = fdata1[, 3:7])
+  outcome1 <- c(outcome1,forecast(tmp_model1, h = 24, xreg=htest[seq(i+1,i+24), 3:7])$mean)
+               
+  i <- i + 24
+}
+
+```
+
+
+```{r echo=FALSE}
+pm_forecast <- data.frame(time = htest$time[1:2159],
+                          pm10 = htest$pm10[1:2159],
+                          forecast = outcome[1:2159],
+                          forecast1 = outcome1[1:2159],
+                          forecast_mix = 0.5*outcome[1:2159] + 0.5*outcome1[1:2159])
+
+ggplot(pm_forecast, aes(x = time)) + geom_line(aes(y = pm10), color = swatch()[6]) +
+  geom_line(aes(y = forecast_mix), color = swatch()[2]) + coord_cartesian(ylim = c(0, 300)) + 
+  labs(title = 'Combined ARIMAX (2, 1, 2)(1, 1, 1)[24] & (3, 1, 3)', subtitle = 'Frequency: hourly, Forecast horizon = 24h', y = 'PM 10 [ug/m3]', x = '')
+```
+Mean Percentage Error of this forecast equals 48.6%. This model, however, is better with respect to decision process:
+
+```{r echo=FALSE}
+dates <- seq(as.Date('2018-01-01'), as.Date('2018-03-31'), by = 'day')
+
+pred_test <- function(day){
+  
+  df <- pm_forecast  %>% select(time, forecast_mix) %>% filter(as_date(time) == day)
+    
+  fst <- df %>% filter(hour(time) >= 1 & hour(time) <= 16)
+  snd <- df %>% filter((hour(time) >= 12 & hour(time) <= 22))
+  
+  if(mean(fst$forecast_mix, na.rm = TRUE) > 150 | mean(snd$forecast_mix, na.rm = TRUE) > 150){
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+  
+}
+
+real_test <- function(day){
+  
+  df <- pm_forecast  %>% select(time, pm10) %>% filter(as_date(time) == day)
+    
+  fst <- df %>% filter(hour(time) >= 1 & hour(time) <= 16)
+  snd <- df %>% filter((hour(time) >= 12 & hour(time) <= 22))
+  
+  if(mean(fst$pm10, na.rm = TRUE) > 150 | mean(snd$pm10, na.rm = TRUE) > 150){
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+  
+}
+
+```
+
+```{r echo=FALSE}
+decision_test <- data.frame(time = dates,
+                            above150_real = sapply(dates, real_test),
+                            above150_pred = sapply(dates, pred_test))
+
+decision_test[decision_test$above150_real | decision_test$above150_pred, ] %>% knitr::kable(col.names = c("Date", "Predicted Huge Pollution", "Actual Huge Pollution"))
+```
+
+Although it has one false positive and two true negatives, this model correctly predicted two days with high pollution.
+
+# Combined aproach
+
+But how does this model really work? Let's take a look at the fragment of the forecast between 3rd and 6th of March.
+
+```{r echo=FALSE}
+filter(pm_forecast, as_date(time) %in% seq(as.Date('2018-03-03'), as.Date('2018-03-6'), by = 'day')) %>% 
+ggplot(aes(x = time, colour = (as_date(time) %in% seq(as.Date('2018-03-04'), as.Date('2018-03-05'), by = 'day')))) +
+         geom_line(aes(y = pm10, group = 0), size = 0.8) + 
+          geom_line(aes(y = forecast_mix, group = 0), color = swatch()[2], size = 0.8) + 
+          theme(legend.position = 'none') + 
+          scale_color_manual(values = c(swatch()[6], swatch()[4])) + coord_cartesian(ylim = c(0, 300)) + 
+  labs(x = "", y = "PM 10 [ug/m3]")
+  
+```
+
+Basically, this forecast pastes re-scaled daily average values (periodical part is responsible for it) and add some angle (that is the impact of non-periodical part). So this particular model is not really far from the naive forecasting. It is very bad at predicting within-day variability, but not so bad for predicting high-or-low states.
+
+In the current version of resolution forecasts are still used but free transport is also provided if the average pollution from all stations is higher than 150 $\mu g/m^3$ at 3am. And having in mind that model specified above, which is in fact similar, helps making decisions quite nicely, we can consider this change as a good choice. Let take a short look how the state of affairs would look like if this criterion were used from the beginning.
+
+There were 16 days when the current version coincides in considering a day as one with high pollution. Current version, although is kind of a forecast, applicable immediately, while we had to wait until next day to average-based method be implemented. 16 days were spotted as highly polluted only by the current version and 8 only by averages method.
+
+<details><summary> **Show table ▼ **</summary>
+
+```{r}
+library(tidyr)
+library(kableExtra)
+
+current <- hourly %>% transmute(time = time, pm10 = rowMeans(hourly[, -1], na.rm = TRUE)) %>% 
+  filter(time > as.Date('2015-12-16')) %>% 
+  filter(hour(time) == 3 & pm10 > 150) %>% 
+  select(time) %>% transmute(day = as.Date(time)) %>% mutate(current = rep(TRUE, nrow(.)))
+
+
+past_days <- c(free[year(free) < 2018] - 1, 
+               as.Date(decision_test[decision_test$above150_real, 'time']))
+
+past_days <- data.frame(day = past_days, averages = rep(TRUE, length(past_days)))
+
+sumtable <- full_join(current, past_days, by = 'day') %>% arrange(day) %>% 
+  replace_na(list(current = FALSE, averages = FALSE))
+
+sumtable %>% transmute(day, current  = cell_spec(current, color = 'white', background = ifelse(current, swatch()[8], swatch()[6])),
+                            averages = cell_spec(averages, color = 'white', background  = ifelse(averages, swatch()[8], swatch()[6]))) %>% 
+knitr::kable(col.names = c("Day", 
+                           "High pollution \n according to \n 3am criterium",
+                           "High pollutoin \n according to averages"), align = 'c', escape = FALSE) %>% kable_styling('responsive')
+  
+```
+</details>
+
+```{r, fig.height=3}
+library(VennDiagram)
+prep_tab <- table(sumtable[-1])
+
+diagram <- draw.pairwise.venn(prep_tab[1, 2] + prep_tab[2, 2], prep_tab[2, 1] + prep_tab[2, 2], prep_tab[2, 2], ind = FALSE)
+
+left_dgm <- diagram[[1]][c('x', 'y')] %>% sapply(., as.numeric) %>% as.data.frame()
+right_dgm <- diagram[[2]][c('x', 'y')] %>% sapply(., as.numeric) %>% as.data.frame()
+
+labels <- sapply(5:7, function(i) diagram[[i]][c('x', 'y')]) %>% t() %>% as.data.frame() %>% 
+  sapply(., as.numeric) %>% as.data.frame()
+labels$text = c("Only 3am: \n 14", "Only averages: \n 8", "Both: \n 16")
+
+ggplot() + 
+  geom_path(data = right_dgm, aes(x, y/4), color = swatch()[5], size = 3) + 
+  geom_path(data = left_dgm, aes(x, y/4), color = swatch()[3], size = 3) + 
+  geom_label(data = labels, aes(x, y/4, label = text), size = 4) + theme_void()
+```
+
+Days falling into category 'only averages' are those with increasing or highly variable pollution level and those falling only into '3am' usually have big drop at afternoon, sometimes returning to the high level at evening.
+
+```{r}
+ggarrange(
+bind_rows(htrain, htest) %>% filter(as.Date(time) %in% sumtable[sumtable$averages & !sumtable$current, ]$day) %>% 
+  ggplot(aes(time, pm10)) + geom_line(color = swatch()[6]) + facet_wrap(~ as.Date(time), scales = 'free_x') + theme(axis.title = element_blank(), axis.text.x = element_blank()) + ylim(0, 300) + labs(title = 'Only averages'),
+bind_rows(htrain, htest) %>% filter(as.Date(time) %in% sumtable[!sumtable$averages & sumtable$current, ]$day) %>% 
+  ggplot(aes(time, pm10)) + geom_line(color = swatch()[6]) + facet_wrap(~ as.Date(time), scales = 'free_x') + theme(axis.title = element_blank(), axis.text.x = element_blank()) + ylim(0, 300) + labs(title = 'Only 3am'), ncol = 2)
+```
+
+As the current version is activated during days with decreasing pollution we can see that it covers days with lower 24h-average PM 10 level than averages method.
+
+```{r}
+curr_table <- select(train, time, pm10) %>% 
+  bind_rows(select(test, time, pm10)) %>% 
+  filter(time %in% sumtable[sumtable$current == TRUE, ]$day)
+
+curr_table$group <- rep("current", nrow(curr_table))
+
+avg_table <- select(train, time, pm10) %>% 
+  bind_rows(select(test, time, pm10)) %>% 
+  filter(time %in% sumtable[sumtable$averages == TRUE, ]$day)
+
+avg_table$group <- rep("averages", nrow(avg_table))
+
+bind_rows(curr_table, avg_table) %>% ggplot(aes(group, pm10, fill = group)) + geom_violin(kernel = 'epanechnikov') + theme(legend.position = 'None') + scale_fill_manual(values = c(swatch()[5], swatch()[3])) + ylim(0, 350) + coord_flip()
+```
+
+[^1]: http://www.gazetakrakowska.pl/artykul/1017323,najbardziej-zatrute-miasta-europy-krakow-na-podium-n-sacz-w-czolowce-raport,id,t.html
+
+[^2]: https://bip.malopolska.pl/umwm,e,pobierz,get.html?id=130889
+
+[^3]: In 2016 the definition of *high pollution* has been slightly changed, generating formally different version of the resolution, but as the method remained principally the same, I'm going to neglect this change wherever it doesn't make confusion.
+
+[^4]: I use this version for comparisions on a test set.
